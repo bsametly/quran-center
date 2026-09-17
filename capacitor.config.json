@@ -1,0 +1,19 @@
+{
+  "appId": "com.bilalquran.center",
+  "appName": "مركز بلال بن الحارث المزني",
+  "webDir": "dist",
+  "backgroundColor": "#14352a",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "backgroundColor": "#14352a",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}

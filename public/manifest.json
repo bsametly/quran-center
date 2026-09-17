@@ -1,0 +1,21 @@
+{
+  "name": "مركز بلال بن الحارث المزني لتحفيظ القرآن الكريم والسنة النبوية",
+  "short_name": "مركز بلال",
+  "description": "نظام إدارة مركز تحفيظ القرآن الكريم — متابعة الحفظ والمراجعة والتسميع والحضور",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f7f4",
+  "theme_color": "#14352a",
+  "icons": [
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
