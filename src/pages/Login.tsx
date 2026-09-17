@@ -19,10 +19,7 @@ export default function Login() {
     
     setLoading(true);
     try {
-      // Simulate network request
-      await new Promise(r => setTimeout(r, 500));
-      
-      const success = login(username.trim(), password);
+      const success = await login(username.trim(), password);
       
       if (success) {
         toast('تم تسجيل الدخول بنجاح', { tone: 'success' });
@@ -30,6 +27,8 @@ export default function Login() {
       } else {
         toast('بيانات الدخول غير صحيحة', { tone: 'error' });
       }
+    } catch (err: any) {
+      toast(err.message || 'حدث خطأ غير متوقع', { tone: 'error' });
     } finally {
       setLoading(false);
     }
