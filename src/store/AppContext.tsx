@@ -29,6 +29,7 @@ import {
   markNotificationReadRemote,
   signOutRemote,
   signInWithEmail,
+  signUpWithEmail,
   fetchAllData,
   supabase
 } from '../lib/supabase';
@@ -547,7 +548,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (isSupabaseConfigured) {
         // Create user in Supabase Auth first
         // We use the provided name as the username
-        const result = await import('../lib/supabase').then(m => m.signUpWithEmail(name, pass, name));
+        const result = await signUpWithEmail(name, pass, name);
         authId = result.id;
         authEmail = result.email;
       }
@@ -608,7 +609,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           linked_id: role !== 'admin' ? linkedId : null,
           created_at: new Date().toISOString(),
         };
-        const { supabase } = await import('../lib/supabase');
         if (supabase) {
           const { error } = await supabase.from('profiles').insert(newProfile);
           if (error) console.error('Failed to insert profile:', error);
