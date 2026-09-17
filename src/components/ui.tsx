@@ -156,19 +156,23 @@ export function Loading({ text = 'جارِ التحميل...' }: { text?: string
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; wide?: boolean }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center sm:p-6" role="dialog" aria-modal>
-      <div className="hidden sm:block absolute inset-0 bg-primary-950/45 backdrop-blur-[2px]" onClick={onClose} />
-      {/* موبايل: ملء الشاشة بالكامل | سطح المكتب: نافذة وسطية */}
-      <div className={cn(
-        'modal-in relative flex flex-col w-full bg-white shadow-2xl',
-        'h-full sm:h-auto sm:max-h-[90dvh] sm:rounded-2xl',
-        wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'
-      )}>
-        <div className="flex-none flex items-center justify-between border-b border-sand-100 bg-white px-5 py-3.5 sm:rounded-t-2xl">
-          <h3 className="font-bold text-sand-900">{title}</h3>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-sand-100 flex items-center justify-center text-sand-400"><X size={18} /></button>
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal>
+      {/* خلفية معتمة — سطح المكتب فقط */}
+      <div className="hidden sm:block fixed inset-0 bg-primary-950/45 backdrop-blur-[2px]" onClick={onClose} />
+      {/* الحاوية: ملء الشاشة على الجوال، مركزية على سطح المكتب */}
+      <div className="fixed inset-0 sm:relative sm:inset-auto sm:flex sm:items-center sm:justify-center sm:min-h-full sm:p-6">
+        <div className={cn(
+          'modal-in bg-white shadow-2xl flex flex-col',
+          'w-full h-full',
+          'sm:h-auto sm:max-h-[90vh] sm:rounded-2xl sm:relative',
+          wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'
+        )}>
+          <div className="shrink-0 flex items-center justify-between border-b border-sand-100 bg-white px-5 py-3.5 sm:rounded-t-2xl">
+            <h3 className="font-bold text-sand-900">{title}</h3>
+            <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-sand-100 flex items-center justify-center text-sand-400"><X size={18} /></button>
+          </div>
+          <div className="grow overflow-y-auto p-5 pb-8">{children}</div>
         </div>
-        <div className="flex-1 overflow-y-auto p-5">{children}</div>
       </div>
     </div>
   );
