@@ -1,0 +1,601 @@
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import type {
+  AppNotification,
+  AttendanceRecord,
+  DB,
+  Halaqa,
+  Mistake,
+  MistakeType,
+  Note,
+  Profile,
+  Recitation,
+  Recommendation,
+  Student,
+  StudentStatus,
+  Teacher,
+} from '../types';
+import { buildDemoDB } from '../data/demo';
+import { juzOfPage, surahByNumber, pagesForExtendedRange } from '../data/quran';
+import { todayISO, uid, RECITATION_LABELS, ATTENDANCE_LABELS } from '../lib/utils';
+import {
+  isSupabaseConfigured,
+  persistAttendance,
+  persistMistakes,
+  persistNote,
+  persistRecitation,
+  persistRecommendation,
+  signOutRemote,
+} from '../lib/supabase';
+
+/* ============ التنبيهات المنبثقة (Toast) ============ */
+export interface Toast {
+  id: string;
+  title: string;
+  body?: string;
+  tone: 'success' | 'error' | 'info';
+}
+
+interface RecitationInput {
+  student_id: string;
+  teacher_id: string;
+  type: Recitation['type'];
+  surah_number: number;
+  surah_to?: number | null;
+  ayah_from: number;
+  ayah_to: number;
+  grade: number;
+  mistakes_count: number;
+  mistake_types: MistakeType[];
+  notes: string;
+  date?: string;
+}
+
+interface AppContextValue {
+  db: DB;
+  user: Profile | null;
+  online: boolean;
+  demoMode: boolean;
+  toasts: Toast[];
+  toast: (title: string, opts?: { body?: string; tone?: Toast['tone'] }) => void;
+  dismissToast: (id: string) => void;
+  login: (username: string, pass: string) => boolean;
+  logout: () => void;
+  resetDemo: () => void;
+  /* عمليات الحسابات */
+  createAccount: (role: Profile['role'], name: string, phone: string | null, pass: string, existingEntityId?: string | null) => void;
+  updateAccount: (id: string, name: string, phone: string | null, pass?: string) => void;
+  deleteAccount: (id: string) => void;
+  addRecitation: (input: RecitationInput) => Recitation;
+  saveAttendance: (date: string, halaqaId: string, teacherId: string, marks: { studentId: string; status: AttendanceRecord['status']; note?: string }[]) => void;
+  addNote: (studentId: string, text: string, tag: Note['tag']) => void;
+  addRecommendation: (studentId: string, text: string, kind: Recommendation['kind']) => void;
+  addStudent: (input: Partial<Student> & { full_name: string }) => Student;
+  updateStudent: (id: string, input: Partial<Student>) => void;
+  deleteStudent: (id: string) => void;
+  updateStudentStatus: (id: string, status: StudentStatus) => void;
+  addHalaqa: (input: Omit<Halaqa, 'id' | 'created_at'>) => void;
+  updateHalaqa: (id: string, input: Partial<Halaqa>) => void;
+  deleteHalaqa: (id: string) => void;
+  addTeacher: (name: string, phone: string) => Teacher;
+  updateTeacher: (id: string, name: string, phone: string) => void;
+  deleteTeacher: (id: string) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
+  myNotifications: AppNotification[];
+}
+
+const AppContext = createContext<AppContextValue | null>(null);
+
+const DB_KEY = 'bilal-db-v2';
+const SESSION_KEY = 'bilal-session-v2';
+
+function loadDB(): DB {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as DB;
+      if (parsed.profiles?.length > 0) return parsed;
+    }
+  } catch {
+    /* تجاهل وابدأ من جديد */
+  }
+  return buildDemoDB();
+}
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [db, setDb] = useState<DB>(loadDB);
+  const [user, setUser] = useState<Profile | null>(() => {
+    try {
+      const id = localStorage.getItem(SESSION_KEY);
+      if (id) return loadDB().profiles.find((p) => p.id === id) ?? null;
+    } catch {
+      return null;
+    }
+    return null;
+  });
+  const [online, setOnline] = useState(navigator.onLine);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  useEffect(() => {
+    localStorage.setItem(DB_KEY, JSON.stringify(db));
+  }, [db]);
+
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+
+  const dismissToast = useCallback((id: string) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
+  const toast = useCallback((title: string, opts?: { body?: string; tone?: Toast['tone'] }) => {
+    const id = uid('toast');
+    setToasts((t) => [...t, { id, title, body: opts?.body, tone: opts?.tone ?? 'success' }]);
+    setTimeout(() => dismissToast(id), 4200);
+  }, [dismissToast]);
+
+  const audit = useCallback(
+    (actor: Profile | null, action: string, entity: string, entityId: string | null, studentId: string | null, summary: string) => {
+      setDb((d) => ({
+        ...d,
+        audit_logs: [
+          { id: uid('log'), actor_id: actor?.id ?? 'system', actor_name: actor?.full_name ?? 'النظام', action, entity, entity_id: entityId, student_id: studentId, summary, created_at: new Date().toISOString() },
+          ...d.audit_logs,
+        ],
+      }));
+    },
+    []
+  );
+
+  const notifyUser = useCallback((userId: string, title: string, body: string, type: AppNotification['type'], studentId: string | null) => {
+    setDb((d) => ({
+      ...d,
+      notifications: [
+        { id: uid('ntf'), user_id: userId, title, body, type, student_id: studentId, read: false, created_at: new Date().toISOString() },
+        ...d.notifications,
+      ],
+    }));
+  }, []);
+
+  /* ---------- المصادقة (وضع تجريبي + Supabase) ---------- */
+  const login = useCallback((username: string, pass: string) => {
+    const p = db.profiles.find((x) => 
+      (x.username === username || x.full_name === username || x.phone === username) && x.password === pass
+    );
+    if (p) {
+      setUser(p);
+      localStorage.setItem(SESSION_KEY, p.id);
+      return true;
+    }
+    return false;
+  }, [db.profiles]);
+
+  const logout = useCallback(() => {
+    setUser(null);
+    localStorage.removeItem(SESSION_KEY);
+    void signOutRemote();
+  }, []);
+
+  const resetDemo = useCallback(() => {
+    const fresh = buildDemoDB();
+    setDb(fresh);
+    localStorage.setItem(DB_KEY, JSON.stringify(fresh));
+    toast('تمت إعادة تعيين البيانات التجريبية', { tone: 'info' });
+  }, [toast]);
+
+  /* ---------- تسجيل التسميع (أهم عملية) ---------- */
+  const addRecitation = useCallback(
+    (input: RecitationInput): Recitation => {
+      const endSurah = input.surah_to || input.surah_number;
+      const pages = pagesForExtendedRange(input.surah_number, input.ayah_from, endSurah, input.ayah_to);
+      const rec: Recitation = {
+        id: uid('r'),
+        student_id: input.student_id,
+        teacher_id: input.teacher_id,
+        date: input.date ?? todayISO(),
+        type: input.type,
+        surah_number: input.surah_number,
+        surah_to: input.surah_to || null,
+        ayah_from: input.ayah_from,
+        ayah_to: input.ayah_to,
+        page_from: pages.from,
+        page_to: pages.to,
+        juz: juzOfPage(pages.to),
+        grade: input.grade,
+        mistakes_count: input.mistakes_count,
+        notes: input.notes || null,
+        created_at: new Date().toISOString(),
+      };
+      const mistakeRows: Mistake[] = input.mistake_types.map((t) => ({
+        id: uid('m'),
+        student_id: input.student_id,
+        recitation_id: rec.id,
+        date: rec.date,
+        type: t,
+        surah_number: input.surah_number,
+        count: 1,
+        note: null,
+        created_at: rec.created_at,
+      }));
+
+      setDb((d) => {
+        const newState = { ...d, recitations: [rec, ...d.recitations], mistakes: [...mistakeRows, ...d.mistakes] };
+        // تحديث المستوى الحالي عند تسجيل حفظ جديد
+        if (input.type === 'hifz') {
+          const endSurahNum = input.surah_to || input.surah_number;
+          const surahName = surahByNumber(endSurahNum).name;
+          newState.students = d.students.map((s) => s.id === input.student_id ? { ...s, current_level: `سورة ${surahName}`, updated_at: new Date().toISOString() } : s);
+        }
+        return newState;
+      });
+
+      const student = db.students.find((s) => s.id === input.student_id);
+      const surah = surahByNumber(input.surah_number).name;
+      audit(user, 'create', 'recitation', rec.id, input.student_id, `سجّل ${RECITATION_LABELS[input.type]} للطالب ${student?.full_name ?? ''} — سورة ${surah} ${input.ayah_from}–${input.ayah_to} (${input.grade}%)`);
+
+      /* إشعار ولي الأمر — في الإنتاج ترسل Edge Function إشعار FCM */
+      const parent = db.parents.find((p) => p.id === student?.parent_id);
+      if (parent) {
+        notifyUser(
+          parent.profile_id,
+          `تم تسجيل تسميع ${student?.full_name ?? ''}`,
+          `${RECITATION_LABELS[input.type]} — سورة ${surah}، الآيات ${input.ayah_from}–${input.ayah_to}. الدرجة: ${input.grade}%.`,
+          'recitation',
+          student?.id ?? null
+        );
+      }
+
+      /* الحفظ في Supabase إن كان مفعّلاً */
+      if (isSupabaseConfigured) {
+        persistRecitation(rec).catch(() => toast('تعذر الحفظ في الخادم — محفوظ محلياً', { tone: 'error' }));
+        persistMistakes(mistakeRows).catch(() => undefined);
+      }
+      return rec;
+    },
+    [db.students, db.parents, user, audit, notifyUser, toast]
+  );
+
+  /* ---------- الحضور ---------- */
+  const saveAttendance = useCallback(
+    (date: string, halaqaId: string, teacherId: string, marks: { studentId: string; status: AttendanceRecord['status']; note?: string }[]) => {
+      const rows: AttendanceRecord[] = marks.map((m) => ({
+        id: uid('a'),
+        student_id: m.studentId,
+        halaqa_id: halaqaId,
+        teacher_id: teacherId,
+        date,
+        status: m.status,
+        check_in_time: m.status === 'present' || m.status === 'late' ? new Date().toTimeString().slice(0, 5) : null,
+        note: m.note ?? null,
+        created_at: new Date().toISOString(),
+      }));
+      setDb((d) => {
+        const rest = d.attendance.filter((a) => !(a.date === date && marks.some((m) => m.studentId === a.student_id)));
+        return { ...d, attendance: [...rows, ...rest] };
+      });
+
+      /* إشعارات الغياب والتأخر لأولياء الأمور */
+      for (const m of marks) {
+        if (m.status === 'absent' || m.status === 'late') {
+          const st = db.students.find((s) => s.id === m.studentId);
+          const parent = db.parents.find((p) => p.id === st?.parent_id);
+          if (parent && st) {
+            notifyUser(
+              parent.profile_id,
+              m.status === 'absent' ? 'تنبيه غياب' : 'تنبيه تأخر',
+              `${m.status === 'absent' ? 'غاب' : 'تأخر'} ${st.full_name} عن الحلقة بتاريخ ${date}.`,
+              'attendance',
+              st.id
+            );
+          }
+        }
+      }
+      audit(user, 'upsert', 'attendance', null, null, `رصد حضور ${marks.length} طالباً بتاريخ ${date}: ${marks.map((m) => ATTENDANCE_LABELS[m.status]).join('، ')}`);
+      if (isSupabaseConfigured && rows.length) persistAttendance(rows).catch(() => toast('تعذر مزامنة الحضور مع الخادم', { tone: 'error' }));
+    },
+    [db.students, db.parents, user, audit, notifyUser, toast]
+  );
+
+  /* ---------- الملاحظات والتوصيات ---------- */
+  const addNote = useCallback(
+    (studentId: string, text: string, tag: Note['tag']) => {
+      const note: Note = { id: uid('n'), student_id: studentId, author_id: user?.id ?? '', author_name: user?.full_name ?? '', date: todayISO(), text, tag, created_at: new Date().toISOString() };
+      setDb((d) => ({ ...d, notes: [note, ...d.notes] }));
+      const st = db.students.find((s) => s.id === studentId);
+      const parent = db.parents.find((p) => p.id === st?.parent_id);
+      if (parent && st) notifyUser(parent.profile_id, 'ملاحظة جديدة', `أضيفت ملاحظة على ملف ${st.full_name}: ${text}`, 'note', st.id);
+      audit(user, 'create', 'note', note.id, studentId, `أضاف ملاحظة على الطالب ${st?.full_name ?? ''}`);
+      if (isSupabaseConfigured) persistNote(note).catch(() => undefined);
+    },
+    [db.students, db.parents, user, audit, notifyUser]
+  );
+
+  const addRecommendation = useCallback(
+    (studentId: string, text: string, kind: Recommendation['kind']) => {
+      const rec: Recommendation = { id: uid('rc'), student_id: studentId, author: 'teacher', date: todayISO(), text, kind, created_at: new Date().toISOString() };
+      setDb((d) => ({ ...d, recommendations: [rec, ...d.recommendations] }));
+      const st = db.students.find((s) => s.id === studentId);
+      const parent = db.parents.find((p) => p.id === st?.parent_id);
+      if (parent && st) notifyUser(parent.profile_id, 'توصية جديدة', `توصية بشأن ${st.full_name}: ${text}`, 'recommendation', st.id);
+      audit(user, 'create', 'recommendation', rec.id, studentId, `أضاف توصية للطالب ${st?.full_name ?? ''}`);
+      if (isSupabaseConfigured) persistRecommendation(rec).catch(() => undefined);
+    },
+    [db.students, db.parents, user, audit, notifyUser]
+  );
+
+  /* ---------- الإدارة ---------- */
+  const addStudent = useCallback(
+    (input: Partial<Student> & { full_name: string }): Student => {
+      const st: Student = {
+        id: uid('s'),
+        student_number: 1000 + db.students.length + 1,
+        full_name: input.full_name,
+        photo_url: null,
+        birth_date: input.birth_date ?? '2015-01-01',
+        phone: input.phone ?? null,
+        parent_id: input.parent_id ?? null,
+        teacher_id: input.teacher_id ?? null,
+        halaqa_id: input.halaqa_id ?? null,
+        enrollment_date: todayISO(),
+        initial_level: input.initial_level ?? 'القاعدة النورانية',
+        current_level: input.current_level ?? input.initial_level ?? 'القاعدة النورانية',
+        status: 'active',
+        notes: input.notes ?? null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setDb((d) => ({ ...d, students: [st, ...d.students] }));
+      audit(user, 'create', 'student', st.id, st.id, `أضاف الطالب ${st.full_name}`);
+      return st;
+    },
+    [db.students.length, user, audit]
+  );
+
+  const updateStudent = useCallback(
+    (id: string, input: Partial<Student>) => {
+      setDb((d) => ({ ...d, students: d.students.map((s) => (s.id === id ? { ...s, ...input, updated_at: new Date().toISOString() } : s)) }));
+      audit(user, 'update', 'student', id, id, `عدّل بيانات الطالب`);
+    },
+    [user, audit]
+  );
+
+  const deleteStudent = useCallback(
+    (id: string) => {
+      setDb((d) => ({
+        ...d,
+        students: d.students.filter((s) => s.id !== id),
+        profiles: d.profiles.filter((p) => p.linked_id !== id),
+        recitations: d.recitations.filter((r) => r.student_id !== id),
+        mistakes: d.mistakes.filter((m) => m.student_id !== id),
+        attendance: d.attendance.filter((a) => a.student_id !== id),
+        notes: d.notes.filter((n) => n.student_id !== id),
+      }));
+      audit(user, 'delete', 'student', id, null, `حذف الطالب`);
+      toast('تم حذف الطالب بنجاح', { tone: 'info' });
+    },
+    [user, audit, toast]
+  );
+
+  const updateStudentStatus = useCallback((id: string, status: StudentStatus) => {
+    setDb((d) => ({ ...d, students: d.students.map((s) => (s.id === id ? { ...s, status, updated_at: new Date().toISOString() } : s)) }));
+  }, []);
+
+  const addHalaqa = useCallback(
+    (input: Omit<Halaqa, 'id' | 'created_at'>) => {
+      const h: Halaqa = { ...input, id: uid('h'), created_at: new Date().toISOString() };
+      setDb((d) => ({ ...d, halaqat: [...d.halaqat, h] }));
+      audit(user, 'create', 'halaqa', h.id, null, `أنشأ ${h.name}`);
+    },
+    [user, audit]
+  );
+
+  const updateHalaqa = useCallback(
+    (id: string, input: Partial<Halaqa>) => {
+      setDb((d) => ({ ...d, halaqat: d.halaqat.map((h) => (h.id === id ? { ...h, ...input } : h)) }));
+      audit(user, 'update', 'halaqa', id, null, `عدّل بيانات الحلقة`);
+    },
+    [user, audit]
+  );
+
+  const deleteHalaqa = useCallback(
+    (id: string) => {
+      setDb((d) => ({
+        ...d,
+        halaqat: d.halaqat.filter((h) => h.id !== id),
+        students: d.students.map((s) => (s.halaqa_id === id ? { ...s, halaqa_id: null } : s)),
+      }));
+      audit(user, 'delete', 'halaqa', id, null, `حذف الحلقة`);
+      toast('تم حذف الحلقة بنجاح', { tone: 'info' });
+    },
+    [user, audit, toast]
+  );
+
+  const addTeacher = useCallback(
+    (name: string, phone: string): Teacher => {
+      const t: Teacher = { id: uid('t'), profile_id: uid('u-t'), full_name: name, phone, photo_url: null, join_date: todayISO(), status: 'active' };
+      const p: Profile = { id: t.profile_id, role: 'teacher', full_name: name, email: null, phone, linked_id: t.id, created_at: new Date().toISOString() };
+      setDb((d) => ({ ...d, teachers: [...d.teachers, t], profiles: [...d.profiles, p] }));
+      audit(user, 'create', 'teacher', t.id, null, `أضاف المحفظ ${name}`);
+      return t;
+    },
+    [user, audit]
+  );
+
+  const updateTeacher = useCallback(
+    (id: string, name: string, phone: string) => {
+      setDb((d) => ({
+        ...d,
+        teachers: d.teachers.map((t) => (t.id === id ? { ...t, full_name: name, phone } : t)),
+        profiles: d.profiles.map((p) => (p.linked_id === id ? { ...p, full_name: name, phone } : p)),
+      }));
+      audit(user, 'update', 'teacher', id, null, `عدّل بيانات المحفظ ${name}`);
+    },
+    [user, audit]
+  );
+
+  const deleteTeacher = useCallback(
+    (id: string) => {
+      setDb((d) => {
+        const teacher = d.teachers.find((t) => t.id === id);
+        if (!teacher) return d;
+        return {
+          ...d,
+          teachers: d.teachers.filter((t) => t.id !== id),
+          profiles: d.profiles.filter((p) => p.linked_id !== id),
+        };
+      });
+      audit(user, 'delete', 'teacher', id, null, `حذف المحفظ`);
+    },
+    [user, audit]
+  );
+
+  const createAccount = useCallback((role: Profile['role'], name: string, phone: string | null, pass: string, existingEntityId?: string | null) => {
+    setDb((d) => {
+      const pId = uid('u');
+      const linkedId = existingEntityId || uid(role.charAt(0));
+      
+      const newProfile: Profile = {
+        id: pId,
+        role,
+        full_name: name,
+        username: name,
+        password: pass,
+        phone: phone,
+        email: null,
+        linked_id: role !== 'admin' ? linkedId : null,
+        created_at: new Date().toISOString(),
+      };
+
+      const newState = { ...d, profiles: [...d.profiles, newProfile] };
+
+      if (role !== 'admin') {
+        if (existingEntityId) {
+          if (role === 'teacher') {
+            newState.teachers = d.teachers.map((t) => (t.id === existingEntityId ? { ...t, profile_id: pId } : t));
+          } else if (role === 'parent') {
+            newState.parents = d.parents.map((p) => (p.id === existingEntityId ? { ...p, profile_id: pId } : p));
+          }
+        } else {
+          if (role === 'teacher') {
+            newState.teachers = [...d.teachers, { id: linkedId, profile_id: pId, full_name: name, phone: phone || '', photo_url: null, join_date: todayISO(), status: 'active' }];
+          } else if (role === 'student') {
+            newState.students = [...d.students, { id: linkedId, student_number: 1000 + d.students.length + 1, full_name: name, phone, parent_id: null, teacher_id: null, halaqa_id: null, photo_url: null, birth_date: '2015-01-01', enrollment_date: todayISO(), initial_level: 'القاعدة النورانية', current_level: 'القاعدة النورانية', status: 'active', notes: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }];
+          } else if (role === 'parent') {
+            newState.parents = [...d.parents, { id: linkedId, profile_id: pId, full_name: name, phone: phone || '' }];
+          }
+        }
+      }
+
+      return newState;
+    });
+    audit(user, 'create', 'profile', null, null, `أنشأ حساب ${role} باسم ${name}`);
+    toast('تم إنشاء الحساب بنجاح');
+  }, [user, audit, toast]);
+
+  const updateAccount = useCallback((id: string, name: string, phone: string | null, pass?: string) => {
+    setDb((d) => {
+      const p = d.profiles.find((x) => x.id === id);
+      if (!p) return d;
+      
+      const newProfiles = d.profiles.map((x) => 
+        x.id === id ? { ...x, full_name: name, username: name, phone, ...(pass ? { password: pass } : {}) } : x
+      );
+
+      const newState = { ...d, profiles: newProfiles };
+      if (p.linked_id) {
+        if (p.role === 'teacher') {
+          newState.teachers = d.teachers.map(x => x.id === p.linked_id ? { ...x, full_name: name, phone: phone || '' } : x);
+        } else if (p.role === 'student') {
+          newState.students = d.students.map(x => x.id === p.linked_id ? { ...x, full_name: name, phone } : x);
+        } else if (p.role === 'parent') {
+          newState.parents = d.parents.map(x => x.id === p.linked_id ? { ...x, full_name: name, phone: phone || '' } : x);
+        }
+      }
+      return newState;
+    });
+    toast('تم تحديث الحساب بنجاح');
+  }, [toast]);
+
+  const deleteAccount = useCallback((id: string) => {
+    setDb((d) => {
+      const p = d.profiles.find((x) => x.id === id);
+      if (!p) return d;
+      
+      const newState = { ...d, profiles: d.profiles.filter((x) => x.id !== id) };
+      if (p.linked_id) {
+        if (p.role === 'teacher') {
+          newState.teachers = d.teachers.filter(x => x.id !== p.linked_id);
+        } else if (p.role === 'student') {
+          newState.students = d.students.filter(x => x.id !== p.linked_id);
+        } else if (p.role === 'parent') {
+          newState.parents = d.parents.filter(x => x.id !== p.linked_id);
+        }
+      }
+      return newState;
+    });
+    toast('تم حذف الحساب بنجاح', { tone: 'info' });
+  }, [toast]);
+
+  /* ---------- الإشعارات ---------- */
+  const markNotificationRead = useCallback((id: string) => {
+    setDb((d) => ({ ...d, notifications: d.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)) }));
+  }, []);
+  const markAllNotificationsRead = useCallback(() => {
+    setDb((d) => ({
+      ...d,
+      notifications: d.notifications.map((n) => (user?.role === 'admin' || n.user_id === user?.id ? { ...n, read: true } : n)),
+    }));
+  }, [user?.id, user?.role]);
+
+  const myNotifications = useMemo(() => {
+    if (!user) return [];
+    if (user.role === 'admin') return db.notifications;
+    return db.notifications.filter((n) => n.user_id === user.id);
+  }, [db.notifications, user]);
+
+  const value: AppContextValue = {
+    db,
+    user,
+    online,
+    demoMode: !isSupabaseConfigured,
+    toasts,
+    toast,
+    dismissToast,
+    login,
+    logout,
+    resetDemo,
+    addRecitation,
+    saveAttendance,
+    addNote,
+    addRecommendation,
+    addStudent,
+    updateStudent,
+    deleteStudent,
+    updateStudentStatus,
+    addHalaqa,
+    updateHalaqa,
+    deleteHalaqa,
+    addTeacher,
+    createAccount,
+    updateAccount,
+    deleteAccount,
+    updateTeacher,
+    deleteTeacher,
+    markNotificationRead,
+    markAllNotificationsRead,
+    myNotifications,
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+export function useApp(): AppContextValue {
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useApp must be used within AppProvider');
+  return ctx;
+}

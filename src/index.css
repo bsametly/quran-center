@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans Arabic", "Segoe UI", system-ui, sans-serif;
+  --font-quran: "Amiri", "Traditional Arabic", serif;
+
+  --color-primary-50: #f0f9f3;
+  --color-primary-100: #dcf1e3;
+  --color-primary-200: #bbe3cb;
+  --color-primary-300: #8ecfab;
+  --color-primary-400: #5ab487;
+  --color-primary-500: #379768;
+  --color-primary-600: #277a53;
+  --color-primary-700: #206044;
+  --color-primary-800: #1c4c37;
+  --color-primary-900: #14352a;
+  --color-primary-950: #0b2018;
+
+  --color-gold-50: #fdf9ea;
+  --color-gold-100: #f9efcb;
+  --color-gold-200: #f2dd8f;
+  --color-gold-300: #e9c657;
+  --color-gold-400: #e0b234;
+  --color-gold-500: #c9a227;
+  --color-gold-600: #a37e1d;
+  --color-gold-700: #7c5c18;
+  --color-gold-800: #5c4517;
+  --color-gold-900: #46350f;
+
+  --color-sand-50: #f7f8f6;
+  --color-sand-100: #eff1ee;
+  --color-sand-200: #dfe3dd;
+  --color-sand-300: #c5cbc2;
+  --color-sand-400: #9aa395;
+  --color-sand-500: #6f7a6a;
+  --color-sand-600: #576150;
+  --color-sand-700: #464f41;
+  --color-sand-800: #384033;
+  --color-sand-900: #2b3127;
+}
+
+html {
+  font-family: var(--font-sans);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-primary-300) transparent;
+}
+
+body {
+  background-color: #f4f7f4;
+  color: var(--color-sand-900);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--color-primary-200); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--color-primary-400); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+.font-quran { font-family: var(--font-quran); }
+
+/* زخرفة إسلامية هندسية خفيفة */
+.pattern-islamic {
+  background-image: url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.08'%3E%3Cpath d='M36 6l7.5 14.4L60 22l-9 12.8L55.5 50 40.5 45 36 60l-4.5-15L16.5 50 21 34.8 12 22l16.5-1.6z'/%3E%3Ccircle cx='36' cy='30' r='7'/%3E%3Cpath d='M0 36h12M60 36h12M36 0v6M36 66v6'/%3E%3C/g%3E%3C/svg%3E");
+}
+.pattern-islamic-dark {
+  background-image: url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%231c4c37' stroke-opacity='0.06'%3E%3Cpath d='M36 6l7.5 14.4L60 22l-9 12.8L55.5 50 40.5 45 36 60l-4.5-15L16.5 50 21 34.8 12 22l16.5-1.6z'/%3E%3Ccircle cx='36' cy='30' r='7'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* انتقالات سلسة خفيفة */
+.page-enter { animation: pageIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.toast-in { animation: toastIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-in { animation: modalIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.drawer-in { animation: drawerIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes drawerIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.gradient-header {
+  background: linear-gradient(135deg, #0b2018 0%, #14352a 45%, #1c4c37 80%, #206044 100%);
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+input[type="date"] { position: relative; }
+
+/* ============ الطباعة — تقرير الطالب ============ */
+.report-sheet { display: none; }
+@media print {
+  body { background: #fff !important; }
+  body.printing .app-chrome { display: none !important; }
+  body.printing .report-sheet {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    background: #fff;
+    color: #000;
+    padding: 0;
+  }
+  @page { size: A4; margin: 14mm; }
+  .avoid-break { break-inside: avoid; }
+}
