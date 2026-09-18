@@ -29,26 +29,23 @@ export async function signInWithEmail(usernameOrEmail: string, password: string)
   let loginEmail = usernameOrEmail;
   
   if (!usernameOrEmail.includes('@')) {
-    // Lookup the user by username or full_name
+    // Lookup the user by full_name safely
     const { data, error } = await supabase
       .from('profiles')
       .select('email')
-      .or(`username.eq."${usernameOrEmail}",full_name.eq."${usernameOrEmail}"`)
+      .ilike('full_name', usernameOrEmail)
       .limit(1)
-      .single();
+      .maybeSingle();
       
-    if (error || !data) {
+    if (error || !data || !data.email) {
       throw new Error('بيانات الدخول غير صحيحة، تأكد من الاسم وكلمة المرور');
     }
     
-    if (data.email) {
-      loginEmail = data.email;
-    } else {
-      throw new Error('بيانات الدخول غير صحيحة، تأكد من الاسم وكلمة المرور');
-    }
+    loginEmail = data.email;
   }
   
-  const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
+  const authPassword = password.length < 6 ? `center_${password}_auth` : password;
+  const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: authPassword });
   if (error) throw new Error(translateAuthError(error.message));
   return data;
 }

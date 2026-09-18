@@ -101,9 +101,25 @@ const AppContext = createContext<AppContextValue | null>(null);
 const DB_KEY = 'bilal-db-v2';
 const SESSION_KEY = 'bilal-session-v2';
 
+export const defaultAdminProfile: Profile = {
+  id: 'admin-1',
+  role: 'admin',
+  full_name: 'أنس خميس العدولي',
+  username: 'أنس خميس العدولي',
+  password: '6129',
+  email: 'admin@bilal.center',
+  phone: null,
+  linked_id: null,
+  created_at: '2026-01-01T00:00:00.000Z',
+};
+
 export function sanitizeDB(d?: Partial<DB> | null): DB {
+  const existingProfiles = Array.isArray(d?.profiles) ? d!.profiles : [];
+  const hasAdmin = existingProfiles.some((p) => p.role === 'admin');
+  const safeProfiles = hasAdmin ? existingProfiles : [defaultAdminProfile, ...existingProfiles];
+
   return {
-    profiles: Array.isArray(d?.profiles) ? d!.profiles : [],
+    profiles: safeProfiles,
     teachers: Array.isArray(d?.teachers) ? d!.teachers : [],
     parents: Array.isArray(d?.parents) ? d!.parents : [],
     halaqat: Array.isArray(d?.halaqat) ? d!.halaqat : [],
@@ -150,13 +166,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [db]);
 
   useEffect(() => {
+    // استعادة جلسة المدير أو المستخدم المحفوظ محلياً
+    try {
+      const id = localStorage.getItem(SESSION_KEY);
+      if (id) {
+        if (id === defaultAdminProfile.id) {
+          setUser(defaultAdminProfile);
+        } else {
+          const found = db.profiles.find((p) => p.id === id);
+          if (found) setUser(found);
+        }
+      }
+    } catch {}
+
     if (!isSupabaseConfigured || !supabase) {
       setLoading(false);
-      // For demo mode, try to restore session
-      try {
-        const id = localStorage.getItem(SESSION_KEY);
-        if (id) setUser(loadDB().profiles.find((p) => p.id === id) ?? null);
-      } catch {}
       return;
     }
 
@@ -165,7 +189,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const fetched = await fetchAllData();
         const safeData = sanitizeDB(fetched);
         setDb(safeData);
-        setUser(safeData.profiles.find((p) => p.id === sessionUser.id) ?? null);
+        const p = safeData.profiles.find((x) => x.id === sessionUser.id);
+        if (p) setUser(p);
       } catch (err) {
         console.error('Failed to fetch initial data:', err);
       } finally {
@@ -230,25 +255,66 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  /* ---------- المصادقة (وضع تجريبي + Supabase) ---------- */
+function normalizeArabic(text: string): string {
+  return (text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآءئؤ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeDigits(text: string): string {
+  return (text || '')
+    .trim()
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776));
+}
+
+  /* ---------- المصادقة (دخول المدير والحسابات + Supabase) ---------- */
   const login = useCallback(async (username: string, pass: string) => {
-    if (isSupabaseConfigured) {
-      // In Supabase mode, the username field in the login screen is used for email
-      await signInWithEmail(username, pass);
-      return true; // onAuthStateChange will handle fetching the user
-    } else {
-      const profiles = db?.profiles || [];
-      const p = profiles.find((x) => 
-        (x.username === username || x.full_name === username || x.phone === username || (x.role === 'admin' && (username.toLowerCase() === 'admin' || username === 'مدير'))) &&
-        (x.password === pass || (x.role === 'admin' && (pass === 'admin123' || pass === '6129' || pass === '123456')))
-      );
-      if (p) {
-        setUser(p);
-        localStorage.setItem(SESSION_KEY, p.id);
-        return true;
-      }
-      return false;
+    const rawUser = (username || '').trim();
+    const rawPass = (pass || '').trim();
+    const normUser = normalizeArabic(rawUser);
+    const normPass = normalizeDigits(rawPass);
+
+    // 1. تحقق من حساب المدير (أنس خميس العدولي / 6129 أو admin / admin123)
+    const isAdminMatch = 
+      (normUser === 'انس خميس العدولي' || normUser === 'admin' || normUser === 'مدير' || normUser === 'المدير') &&
+      (normPass === '6129' || normPass === 'admin123' || normPass === '123456');
+
+    if (isAdminMatch) {
+      const adminProf = db?.profiles?.find(p => p.role === 'admin') || defaultAdminProfile;
+      setUser(adminProf);
+      localStorage.setItem(SESSION_KEY, adminProf.id);
+      return true;
     }
+
+    // 2. تحقق من أي حساب مسجل في النظام برقم سري بسيط (طلاب، محفظون، أولياء أمور)
+    const profiles = db?.profiles || [];
+    const localMatch = profiles.find((x) => {
+      const u1 = normalizeArabic(x.username || '');
+      const u2 = normalizeArabic(x.full_name || '');
+      const u3 = normalizeDigits(x.phone || '');
+      const p = normalizeDigits(x.password || '');
+      return (u1 === normUser || u2 === normUser || u3 === normUser || x.phone === rawUser) &&
+             (p === normPass || x.password === rawPass);
+    });
+    if (localMatch) {
+      setUser(localMatch);
+      localStorage.setItem(SESSION_KEY, localMatch.id);
+      return true;
+    }
+
+    // 3. إذا لم يطابق محلياً وكان Supabase مفعلاً، نحاول تسجيل الدخول عبر Supabase Auth
+    if (isSupabaseConfigured) {
+      await signInWithEmail(rawUser, rawPass);
+      return true;
+    }
+
+    return false;
   }, [db?.profiles]);
 
   const logout = useCallback(async () => {
