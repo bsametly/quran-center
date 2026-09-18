@@ -141,7 +141,7 @@ export default function Accounts() {
                     >
                       <Edit2 size={16} />
                     </button>
-                    {p.id !== 'admin-1' && (
+                    {p.role !== 'admin' && (
                       <button
                         onClick={() => setDeleteModal({ open: true, id: p.id, name: p.full_name })}
                         className="p-2 text-sand-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
