@@ -2,7 +2,7 @@ import type { DB, Profile } from '../types';
 
 export function buildDemoDB(): DB {
   const adminProfile: Profile = {
-    id: 'admin-1',
+    id: '00000000-0000-0000-0000-000000000001',
     role: 'admin',
     full_name: 'أنس خميس العدولي',
     username: 'أنس خميس العدولي',
