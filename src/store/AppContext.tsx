@@ -109,7 +109,13 @@ function loadDB(): DB {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [db, setDb] = useState<DB>(() => isSupabaseConfigured ? ({} as DB) : loadDB());
+  const emptyDB: DB = {
+    profiles: [], teachers: [], parents: [], halaqat: [], students: [],
+    recitations: [], mistakes: [], attendance: [], exams: [], exam_results: [],
+    assignments: [], notes: [], recommendations: [], notifications: [], audit_logs: []
+  };
+  
+  const [db, setDb] = useState<DB>(() => isSupabaseConfigured ? emptyDB : { ...emptyDB, ...loadDB() });
   const [user, setUser] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [online, setOnline] = useState(navigator.onLine);
@@ -151,7 +157,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         loadData(session.user);
       } else {
         setUser(null);
-        setDb({} as DB); // Clear DB on logout
+        setDb(emptyDB); // Clear DB on logout
         setLoading(false);
       }
     });
