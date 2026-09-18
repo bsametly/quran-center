@@ -19,7 +19,13 @@ export default function Dashboard() {
   if (user.role === 'admin') return <AdminDashboard />;
   if (user.role === 'teacher') return <TeacherDashboard />;
   if (user.role === 'parent') return <ParentDashboard />;
-  return null;
+  return (
+    <div className="p-6">
+      <Card className="p-8 text-center">
+        <EmptyState title={`مرحباً بك، ${user.full_name || ''}`} hint="تم تسجيل دخولك بنجاح. تواصل مع إدارة المركز إذا كنت بحاجة لصلاحيات إضافية." />
+      </Card>
+    </div>
+  );
 }
 
 /* ================= شارة ودجت آخر التسميعات ================= */
@@ -44,15 +50,23 @@ function RecitationRow({ r, studentName }: { r: { id: string; student_id: string
 
 /* ================= لوحة المدير ================= */
 function AdminDashboard() {
-  const { db, myNotifications } = useApp();
+  const { db, myNotifications, user } = useApp();
   const navigate = useNavigate();
   const today = todayISO();
-  const activeStudents = db.students.filter((s) => s.status === 'active');
-  const attToday = db.attendance.filter((a) => a.date === today);
+  const students = db?.students || [];
+  const attendance = db?.attendance || [];
+  const recitations = db?.recitations || [];
+  const halaqat = db?.halaqat || [];
+  const teachers = db?.teachers || [];
+  const auditLogs = db?.audit_logs || [];
+  const notifications = myNotifications || [];
+
+  const activeStudents = students.filter((s) => s.status === 'active');
+  const attToday = attendance.filter((a) => a.date === today);
   const presentToday = attToday.filter((a) => a.status === 'present' || a.status === 'late').length;
   const absentToday = attToday.filter((a) => a.status === 'absent').length;
-  const recentRecs = sortByDateDesc(db.recitations).slice(0, 8);
-  const graded = db.recitations.filter((r) => r.date >= daysAgoISO(30) && r.type !== 'wird');
+  const recentRecs = sortByDateDesc(recitations).slice(0, 8);
+  const graded = recitations.filter((r) => r.date >= daysAgoISO(30) && r.type !== 'wird');
   const avgGrade = graded.length ? Math.round(graded.reduce((s, r) => s + r.grade, 0) / graded.length) : 0;
 
   const withStats = activeStudents.map((s) => ({ s, stats: getStudentStats(db, s.id), score: excellenceScore(db, s.id, daysAgoISO(30)).score }));
@@ -61,18 +75,21 @@ function AdminDashboard() {
 
   const last7 = Array.from({ length: 7 }, (_, i) => {
     const date = daysAgoISO(6 - i);
-    const rows = db.attendance.filter((a) => a.date === date);
+    const rows = attendance.filter((a) => a.date === date);
     const present = rows.filter((a) => a.status === 'present' || a.status === 'late').length;
-    return { label: WEEKDAYS[new Date(date + 'T00:00:00').getDay()], value: rows.length ? Math.round((present / rows.length) * 100) : 0 };
+    const d = new Date(date + 'T00:00:00');
+    const dayName = !isNaN(d.getTime()) ? WEEKDAYS[d.getDay()] : '—';
+    return { label: dayName, value: rows.length ? Math.round((present / rows.length) * 100) : 0 };
   });
 
-  const studentName = (id: string) => db.students.find((s) => s.id === id)?.full_name ?? 'طالب';
+  const studentName = (id: string) => students.find((s) => s.id === id)?.full_name ?? 'طالب';
+  const adminName = user?.full_name || db?.profiles?.find((p) => p.role === 'admin')?.full_name || 'المدير';
 
   return (
     <div>
       <div className="rounded-2xl gradient-header pattern-islamic text-white p-5 sm:p-6 mb-6 relative overflow-hidden">
         <div className="relative">
-          <h1 className="text-lg sm:text-2xl font-bold">السلام عليكم، {db.profiles.find((p) => p.role === 'admin')?.full_name}</h1>
+          <h1 className="text-lg sm:text-2xl font-bold">السلام عليكم، {adminName}</h1>
           <p className="text-white/65 text-[13px] mt-1">{formatDate(today)} — إليك ملخص نشاط المركز</p>
           <div className="flex flex-wrap gap-2 mt-4">
             <Button variant="gold" size="sm" onClick={() => navigate('/recitations/new')}><PenLine size={15} /> تسجيل تسميع</Button>
@@ -83,9 +100,9 @@ function AdminDashboard() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <StatCard icon={<Users size={20} />} label="الطلاب النشطون" value={activeStudents.length} sub={`إجمالي ${db.students.length}`} />
-        <StatCard icon={<UserCheck size={20} />} label="المحفظون" value={db.teachers.length} tone="sky" />
-        <StatCard icon={<CircleDot size={20} />} label="الحلقات" value={db.halaqat.length} tone="gold" />
+        <StatCard icon={<Users size={20} />} label="الطلاب النشطون" value={activeStudents.length} sub={`إجمالي ${students.length}`} />
+        <StatCard icon={<UserCheck size={20} />} label="المحفظون" value={teachers.length} tone="sky" />
+        <StatCard icon={<CircleDot size={20} />} label="الحلقات" value={halaqat.length} tone="gold" />
         <StatCard icon={<BookOpen size={20} />} label="متوسط التسميع (30 يوم)" value={`${avgGrade}%`} tone="sand" />
         <StatCard icon={<CalendarCheck size={20} />} label="حضور اليوم" value={presentToday} sub={`من أصل ${activeStudents.length}`} />
         <StatCard icon={<AlertTriangle size={20} />} label="غياب اليوم" value={absentToday} tone="red" />
@@ -141,13 +158,13 @@ function AdminDashboard() {
             <Link to="/notifications" className="mr-auto text-[12px] font-semibold text-primary-700">الكل</Link>
           </div>
           <div className="divide-y divide-sand-50">
-            {myNotifications.slice(0, 4).map((n) => (
+            {notifications.slice(0, 4).map((n) => (
               <div key={n.id} className="px-4 py-3">
                 <div className="text-[13px] font-bold text-sand-800">{n.title}</div>
                 <div className="text-[12px] text-sand-400 leading-relaxed mt-0.5 line-clamp-2">{n.body}</div>
               </div>
             ))}
-            {myNotifications.length === 0 && <EmptyState title="لا توجد تنبيهات" />}
+            {notifications.length === 0 && <EmptyState title="لا توجد تنبيهات" />}
           </div>
         </Card>
 
@@ -156,12 +173,12 @@ function AdminDashboard() {
             <h2 className="font-bold text-sand-900 text-[14px]">آخر العمليات (سجل التدقيق)</h2>
           </div>
           <div className="divide-y divide-sand-50">
-            {db.audit_logs.slice(0, 5).map((log) => (
+            {auditLogs.slice(0, 5).map((log) => (
               <div key={log.id} className="px-4 py-3 flex items-start gap-3">
                 <span className="mt-1 w-2 h-2 rounded-full bg-primary-400 shrink-0" />
                 <div className="min-w-0">
                   <div className="text-[12.5px] text-sand-700 leading-relaxed">{log.summary}</div>
-                  <div className="text-[10.5px] text-sand-300 mt-0.5">{log.actor_name} · {relativeDay(log.created_at.slice(0, 10))}</div>
+                  <div className="text-[10.5px] text-sand-300 mt-0.5">{log.actor_name} · {relativeDay(log.created_at ? log.created_at.slice(0, 10) : '')}</div>
                 </div>
               </div>
             ))}
@@ -190,7 +207,7 @@ function TeacherDashboard() {
 
   return (
     <div>
-      <PageHeader title={`أهلاً ${user?.full_name.split(' ')[0] ?? ''}`} subtitle={`${myHalaqat.map((h) => h.name).join('، ') || 'حلقاتك'} — ${formatDate(today)}`} />
+      <PageHeader title={`أهلاً ${user?.full_name?.split(' ')[0] ?? 'بك'}`} subtitle={`${myHalaqat.map((h) => h.name).join('، ') || 'حلقاتك'} — ${formatDate(today)}`} />
 
       {/* زر التسميع الرئيسي — مسار أقل النقرات */}
       <button

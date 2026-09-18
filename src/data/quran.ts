@@ -141,7 +141,7 @@ export const JUZ_NAMES = [
 ];
 
 export function surahByNumber(n: number): Surah {
-  return SURAHS[n - 1];
+  return SURAHS[n - 1] ?? SURAHS[0] ?? { number: 1, name: 'الفاتحة', englishName: 'Al-Faatiha', ayahs: 7, page: 1, type: 'meccan' };
 }
 
 export function juzOfPage(page: number): number {

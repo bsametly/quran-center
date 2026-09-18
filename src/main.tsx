@@ -9,11 +9,16 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>
 );
 
-/* تسجيل Service Worker للعمل كتطبيق PWA (في الإنتاج فقط) */
+/* تحديث Service Worker وإلغاء أي كاش قديم يسبب شاشة بيضاء */
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      /* تجاهل — التطبيق يعمل بدون كاش */
-    });
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        reg.update();
+      })
+      .catch(() => {
+        /* تجاهل */
+      });
   });
 }

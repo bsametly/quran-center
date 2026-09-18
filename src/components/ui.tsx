@@ -94,12 +94,13 @@ export function Select({ className, children, ...props }: React.SelectHTMLAttrib
 
 /* ================== الأفاتار ================== */
 const avatarColors = ['bg-primary-100 text-primary-800', 'bg-gold-100 text-gold-800', 'bg-sky-100 text-sky-800', 'bg-rose-100 text-rose-800', 'bg-violet-100 text-violet-800', 'bg-teal-100 text-teal-800'];
-export function Avatar({ name, size = 'md', className }: { name: string; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string }) {
-  const hash = name.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+export function Avatar({ name = '', size = 'md', className }: { name?: string; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string }) {
+  const safeName = String(name || 'م');
+  const hash = safeName.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
   const sizes = { sm: 'w-8 h-8 text-[11px]', md: 'w-10 h-10 text-xs', lg: 'w-14 h-14 text-base', xl: 'w-20 h-20 text-2xl' };
   return (
     <div className={cn('flex items-center justify-center rounded-full font-bold shrink-0', avatarColors[hash % avatarColors.length], sizes[size], className)}>
-      {initials(name)}
+      {initials(safeName)}
     </div>
   );
 }

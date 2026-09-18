@@ -56,11 +56,15 @@ export const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'ا
 export function weekdayName(iso: string): string {
   return WEEKDAYS[new Date(iso + 'T00:00:00').getDay()];
 }
-export function relativeDay(iso: string): string {
+export function relativeDay(iso?: string | null): string {
+  if (!iso) return '—';
   const today = todayISO();
   if (iso === today) return 'اليوم';
   if (iso === daysAgoISO(1)) return 'أمس';
-  const diff = Math.round((new Date(today).getTime() - new Date(iso).getTime()) / 86400000);
+  const todayTime = new Date(today).getTime();
+  const isoTime = new Date(iso).getTime();
+  if (isNaN(todayTime) || isNaN(isoTime)) return formatDateShort(iso);
+  const diff = Math.round((todayTime - isoTime) / 86400000);
   if (diff > 1 && diff <= 7) return `منذ ${diff} أيام`;
   return formatDateShort(iso);
 }
@@ -267,7 +271,8 @@ export function excellenceScore(db: DB, studentId: string, from: string): { scor
   return { score, details: { pages, avgGrade: Math.round(avgGrade), attendance: Math.round(attPercent), improvement: Math.round(improvement * 10) / 10 } };
 }
 
-export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/);
+export function initials(name?: string | null): string {
+  if (!name) return '—';
+  const parts = String(name).trim().split(/\s+/);
   return (parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '');
 }

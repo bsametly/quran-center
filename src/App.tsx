@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppProvider, useApp } from './store/AppContext';
 import { ToastContainer } from './components/ui';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -31,7 +32,9 @@ function RequireRole({ roles, children }: { roles: Role[]; children: React.React
 
 function Home() {
   const { user } = useApp();
-  if (user?.role === 'student') return <Navigate to={`/students/${user.linked_id}`} replace />;
+  if (user?.role === 'student' && user.linked_id) {
+    return <Navigate to={`/students/${user.linked_id}`} replace />;
+  }
   return <Dashboard />;
 }
 
@@ -81,10 +84,14 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <HashRouter>
-        <AppRoutes />
-      </HashRouter>
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <HashRouter>
+          <ErrorBoundary>
+            <AppRoutes />
+          </ErrorBoundary>
+        </HashRouter>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }
