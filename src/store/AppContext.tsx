@@ -25,6 +25,7 @@ import {
   persistNote,
   persistRecommendation,
   persistTeacher,
+  persistProfile,
   persistStudent,
   persistHalaqa,
   deleteTeacherRemote,
@@ -102,7 +103,7 @@ const DB_KEY = 'bilal-db-v2';
 const SESSION_KEY = 'bilal-session-v2';
 
 export const defaultAdminProfile: Profile = {
-  id: 'admin-1',
+  id: '00000000-0000-0000-0000-000000000001',
   role: 'admin',
   full_name: 'أنس خميس العدولي',
   username: 'أنس خميس العدولي',
@@ -115,7 +116,7 @@ export const defaultAdminProfile: Profile = {
 
 export function sanitizeDB(d?: Partial<DB> | null): DB {
   const existingProfiles = Array.isArray(d?.profiles) ? d!.profiles : [];
-  const hasAdmin = existingProfiles.some((p) => p.role === 'admin');
+  const hasAdmin = existingProfiles.some((p) => p.role === 'admin' || p.id === defaultAdminProfile.id || p.id === 'admin-1');
   const safeProfiles = hasAdmin ? existingProfiles : [defaultAdminProfile, ...existingProfiles];
 
   return {
@@ -152,66 +153,76 @@ function loadDB(): DB {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const emptyDB = sanitizeDB();
-  const [db, setDb] = useState<DB>(() => isSupabaseConfigured ? emptyDB : sanitizeDB(loadDB()));
+  const [db, setDb] = useState<DB>(() => sanitizeDB(loadDB()));
   const [user, setUser] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // حفظ نسخة احتياطية محلية دائماً لضمان عدم ضياع البيانات
   useEffect(() => {
-    if (!isSupabaseConfigured) {
+    if (db && db.profiles.length > 0) {
       localStorage.setItem(DB_KEY, JSON.stringify(db));
     }
   }, [db]);
 
   useEffect(() => {
-    // استعادة جلسة المدير أو المستخدم المحفوظ محلياً
-    try {
-      const id = localStorage.getItem(SESSION_KEY);
-      if (id) {
-        if (id === defaultAdminProfile.id) {
-          setUser(defaultAdminProfile);
-        } else {
-          const found = db.profiles.find((p) => p.id === id);
-          if (found) setUser(found);
+    // 1. استعادة الجلسة من التخزين المحلي أولاً
+    const restoreLocalSession = (profilesList: Profile[]) => {
+      try {
+        const id = localStorage.getItem(SESSION_KEY);
+        if (id) {
+          if (id === defaultAdminProfile.id || id === 'admin-1') {
+            setUser(defaultAdminProfile);
+          } else {
+            const found = profilesList.find((p) => p.id === id);
+            if (found) setUser(found);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    };
 
     if (!isSupabaseConfigured || !supabase) {
+      restoreLocalSession(db.profiles);
       setLoading(false);
       return;
     }
 
-    const loadData = async (sessionUser: any) => {
+    // 2. مزامنة البيانات من Supabase
+    const syncData = async () => {
       try {
         const fetched = await fetchAllData();
         const safeData = sanitizeDB(fetched);
         setDb(safeData);
-        const p = safeData.profiles.find((x) => x.id === sessionUser.id);
-        if (p) setUser(p);
+        restoreLocalSession(safeData.profiles);
       } catch (err) {
-        console.error('Failed to fetch initial data:', err);
+        console.error('تعذر جلب البيانات الأولية من Supabase، استخدام النسخة المحلية:', err);
+        const cached = sanitizeDB(loadDB());
+        setDb(cached);
+        restoreLocalSession(cached.profiles);
       } finally {
         setLoading(false);
       }
     };
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setLoading(true);
-        loadData(session.user);
-      } else {
-        setUser(null);
-        setDb(emptyDB); // Clear DB on logout
-        setLoading(false);
+    syncData();
+
+    // الاستماع لتغييرات تسجيل الدخول في Supabase Auth
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        syncData();
+      } else if (event === 'SIGNED_OUT') {
+        const savedId = localStorage.getItem(SESSION_KEY);
+        if (savedId && (savedId === defaultAdminProfile.id || savedId === 'admin-1')) {
+          // الحفاظ على جلسة المدير المحلي
+          return;
+        }
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -476,7 +487,7 @@ function normalizeDigits(text: string): string {
   const addStudent = useCallback(
     (input: Partial<Student> & { full_name: string }): Student => {
       const st: Student = {
-        id: uid('s'),
+        id: uid(),
         student_number: 1000 + db.students.length + 1,
         full_name: input.full_name,
         photo_url: null,
@@ -496,7 +507,10 @@ function normalizeDigits(text: string): string {
       setDb((d) => ({ ...d, students: [st, ...d.students] }));
       audit(user, 'create', 'student', st.id, st.id, `أضاف الطالب ${st.full_name}`);
       if (isSupabaseConfigured) {
-        persistStudent(st).catch(() => toast('تعذر حفظ الطالب في الخادم', { tone: 'error' }));
+        persistStudent(st).catch((err) => {
+          console.error('persistStudent error:', err);
+          toast('تعذر حفظ الطالب في الخادم — تم الحفظ محلياً', { tone: 'error' });
+        });
       }
       return st;
     },
@@ -544,11 +558,14 @@ function normalizeDigits(text: string): string {
 
   const addHalaqa = useCallback(
     (input: Omit<Halaqa, 'id' | 'created_at'>) => {
-      const h: Halaqa = { ...input, id: uid('h'), created_at: new Date().toISOString() };
+      const h: Halaqa = { ...input, id: uid(), created_at: new Date().toISOString() };
       setDb((d) => ({ ...d, halaqat: [...d.halaqat, h] }));
       audit(user, 'create', 'halaqa', h.id, null, `أنشأ ${h.name}`);
       if (isSupabaseConfigured) {
-        persistHalaqa(h).catch(() => toast('تعذر حفظ الحلقة في الخادم', { tone: 'error' }));
+        persistHalaqa(h).catch((err) => {
+          console.error('persistHalaqa error:', err);
+          toast('تعذر حفظ الحلقة في الخادم — تم الحفظ محلياً', { tone: 'error' });
+        });
       }
     },
     [user, audit, toast]
@@ -587,12 +604,17 @@ function normalizeDigits(text: string): string {
 
   const addTeacher = useCallback(
     (name: string, phone: string): Teacher => {
-      const t: Teacher = { id: uid('t'), profile_id: uid('u-t'), full_name: name, phone, photo_url: null, join_date: todayISO(), status: 'active' };
-      const p: Profile = { id: t.profile_id, role: 'teacher', full_name: name, email: null, phone, linked_id: t.id, created_at: new Date().toISOString() };
+      const teacherId = uid();
+      const profileId = uid();
+      const t: Teacher = { id: teacherId, profile_id: profileId, full_name: name, phone, photo_url: null, join_date: todayISO(), status: 'active' };
+      const p: Profile = { id: profileId, role: 'teacher', full_name: name, email: null, phone, linked_id: t.id, created_at: new Date().toISOString() };
       setDb((d) => ({ ...d, teachers: [...d.teachers, t], profiles: [...d.profiles, p] }));
       audit(user, 'create', 'teacher', t.id, null, `أضاف المحفظ ${name}`);
       if (isSupabaseConfigured) {
-        persistTeacher(t).catch(() => toast('تعذر حفظ المحفظ في الخادم', { tone: 'error' }));
+        persistTeacher(t, p).catch((err) => {
+          console.error('persistTeacher error:', err);
+          toast('تعذر حفظ المحفظ في الخادم — تم الحفظ محلياً', { tone: 'error' });
+        });
       }
       return t;
     },
@@ -639,85 +661,71 @@ function normalizeDigits(text: string): string {
 
   const createAccount = useCallback(async (role: Profile['role'], name: string, phone: string | null, pass: string, existingEntityId?: string | null) => {
     try {
-      let authId = uid('u'); // Default to random ID for demo mode
-      let authEmail = null;
+      const authId = uid();
+      const linkedId = existingEntityId || uid();
+      let authEmail = `${authId.slice(0, 8)}@bilal.center`;
       
       if (isSupabaseConfigured) {
-        // Create user in Supabase Auth first
-        // We use the provided name as the username
-        const result = await signUpWithEmail(name, pass, name);
-        authId = result.id;
-        authEmail = result.email;
+        try {
+          const res = await signUpWithEmail(name, pass, name);
+          if (res?.email) authEmail = res.email;
+        } catch (authErr: any) {
+          console.warn('Background Supabase auth signup notice:', authErr.message);
+          if (authErr.message?.includes('المفتاح المستخدم في VITE_SUPABASE_ANON_KEY')) {
+            toast(authErr.message, { tone: 'error' });
+            return;
+          }
+        }
       }
 
-      setDb((d) => {
-        const pId = authId;
-        const linkedId = existingEntityId || uid(role.charAt(0));
-        
-        const newProfile: Profile = {
-          id: pId,
-          role,
-          full_name: name,
-          username: name,
-          password: pass,
-          phone: phone,
-          email: authEmail,
-          linked_id: role !== 'admin' ? linkedId : null,
-          created_at: new Date().toISOString(),
-        };
+      const newProfile: Profile = {
+        id: authId,
+        role,
+        full_name: name,
+        username: name,
+        password: pass,
+        phone: phone || null,
+        email: authEmail,
+        linked_id: role !== 'admin' ? linkedId : null,
+        created_at: new Date().toISOString(),
+      };
 
+      setDb((d) => {
         const newState = { ...d, profiles: [...d.profiles, newProfile] };
 
         if (role !== 'admin') {
           if (existingEntityId) {
             if (role === 'teacher') {
-              newState.teachers = d.teachers.map((t) => (t.id === existingEntityId ? { ...t, profile_id: pId } : t));
+              newState.teachers = d.teachers.map((t) => (t.id === existingEntityId ? { ...t, profile_id: authId } : t));
             } else if (role === 'parent') {
-              newState.parents = d.parents.map((p) => (p.id === existingEntityId ? { ...p, profile_id: pId } : p));
+              newState.parents = d.parents.map((p) => (p.id === existingEntityId ? { ...p, profile_id: authId } : p));
             }
           } else {
             if (role === 'teacher') {
-              newState.teachers = [...d.teachers, { id: linkedId, profile_id: pId, full_name: name, phone: phone || '', photo_url: null, join_date: todayISO(), status: 'active' }];
+              newState.teachers = [...d.teachers, { id: linkedId, profile_id: authId, full_name: name, phone: phone || '', photo_url: null, join_date: todayISO(), status: 'active' }];
             } else if (role === 'student') {
               newState.students = [...d.students, { id: linkedId, student_number: 1000 + d.students.length + 1, full_name: name, phone, parent_id: null, teacher_id: null, halaqa_id: null, photo_url: null, birth_date: '2015-01-01', enrollment_date: todayISO(), initial_level: 'القاعدة النورانية', current_level: 'القاعدة النورانية', status: 'active', notes: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }];
             } else if (role === 'parent') {
-              newState.parents = [...d.parents, { id: linkedId, profile_id: pId, full_name: name, phone: phone || '' }];
+              newState.parents = [...d.parents, { id: linkedId, profile_id: authId, full_name: name, phone: phone || '' }];
             }
           }
         }
-        
-        // Push profile to supabase if configured (linked entities will be pushed later or we should push them here)
-        // Wait, if it's supabase, we actually need to insert the profile.
-        // Actually, let's insert it inside the try block below.
         return newState;
       });
       
-      if (isSupabaseConfigured) {
-        // We need to wait for state to update, or just use the raw insert
-        const linkedId = existingEntityId || uid(role.charAt(0));
-        const newProfile: Profile = {
-          id: authId,
-          role,
-          full_name: name,
-          username: name,
-          password: pass,
-          phone: phone,
-          email: authEmail,
-          linked_id: role !== 'admin' ? linkedId : null,
-          created_at: new Date().toISOString(),
-        };
-        if (supabase) {
-          const { error } = await supabase.from('profiles').insert(newProfile);
-          if (error) console.error('Failed to insert profile:', error);
-          
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await persistProfile(newProfile);
           if (role !== 'admin' && !existingEntityId) {
-             if (role === 'teacher') await supabase.from('teachers').insert({ id: linkedId, profile_id: authId, full_name: name, phone: phone || '', status: 'active' });
-             else if (role === 'student') await supabase.from('students').insert({ id: linkedId, profile_id: authId, full_name: name, phone, status: 'active', initial_level: 'القاعدة النورانية', current_level: 'القاعدة النورانية' });
-             else if (role === 'parent') await supabase.from('parents').insert({ id: linkedId, profile_id: authId, full_name: name, phone: phone || '' });
+            if (role === 'teacher') await supabase.from('teachers').upsert({ id: linkedId, profile_id: authId, full_name: name, phone: phone || null, status: 'active', join_date: todayISO() });
+            else if (role === 'student') await supabase.from('students').upsert({ id: linkedId, profile_id: authId, full_name: name, phone: phone || null, status: 'active', initial_level: 'القاعدة النورانية', current_level: 'القاعدة النورانية', enrollment_date: todayISO() });
+            else if (role === 'parent') await supabase.from('parents').upsert({ id: linkedId, profile_id: authId, full_name: name, phone: phone || null });
           } else if (role !== 'admin' && existingEntityId) {
-             if (role === 'teacher') await supabase.from('teachers').update({ profile_id: authId }).eq('id', existingEntityId);
-             else if (role === 'parent') await supabase.from('parents').update({ profile_id: authId }).eq('id', existingEntityId);
+            if (role === 'teacher') await supabase.from('teachers').update({ profile_id: authId }).eq('id', existingEntityId);
+            else if (role === 'parent') await supabase.from('parents').update({ profile_id: authId }).eq('id', existingEntityId);
           }
+        } catch (syncErr) {
+          console.warn('Could not sync created account to Supabase:', syncErr);
         }
       }
 
@@ -727,6 +735,7 @@ function normalizeDigits(text: string): string {
       toast(err.message || 'فشل إنشاء الحساب', { tone: 'error' });
     }
   }, [user, audit, toast]);
+
 
   const updateAccount = useCallback((id: string, name: string, phone: string | null, pass?: string) => {
     setDb((d) => {
