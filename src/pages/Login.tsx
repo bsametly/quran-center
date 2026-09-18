@@ -84,19 +84,6 @@ export default function Login() {
               <Button className="w-full" size="lg" loading={loading} onClick={handleLogin}>
                 <LogIn size={17} /> دخول
               </Button>
-
-              <div className="pt-2 border-t border-sand-100/80">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsername('أنس خميس العدولي');
-                    setPassword('6129');
-                  }}
-                  className="w-full py-2 px-3 bg-gold-50/70 hover:bg-gold-100/80 text-gold-900 border border-gold-300/50 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                >
-                  <span>الدخول السريع كمدير (أنس خميس العدولي - 6129)</span>
-                </button>
-              </div>
             </div>
           </Card>
 
