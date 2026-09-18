@@ -55,16 +55,22 @@ export async function signUpWithEmail(username: string, password: string, name: 
   
   // Generate a random valid email for background auth
   const signupEmail = `${crypto.randomUUID()}@center.local`;
+  const authPassword = password.length < 6 ? `center_${password}_auth` : password;
   
   const { data, error } = await supabaseNoSession.auth.signUp({ 
     email: signupEmail, 
-    password,
+    password: authPassword,
     options: {
       data: { full_name: name, username }
     }
   });
   
-  if (error) throw new Error('فشل إنشاء الحساب: ' + error.message);
+  if (error) {
+    if (error.message.includes('Forbidden use of secret API key')) {
+      throw new Error('المفتاح المستخدم في VITE_SUPABASE_ANON_KEY هو المفتاح السري (Secret Key) بدلاً من المفتاح العام (Anon/Publishable Key). يرجى وضع المفتاح العام.');
+    }
+    throw new Error('فشل إنشاء الحساب: ' + error.message);
+  }
   if (!data.user) throw new Error('فشل إنشاء الحساب: لا يوجد مستخدم');
   
   return { id: data.user.id, email: signupEmail };
@@ -168,10 +174,66 @@ export async function saveDeviceToken(userId: string, token: string, platform: '
 }
 
 // Additional Mutations required for complete AppContext integration
-export async function persistTeacher(teacher: Teacher): Promise<void> {
+export async function persistProfile(profile: Profile): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase.from('teachers').upsert(teacher);
-  if (error) throw new Error('فشل حفظ بيانات المحفظ');
+  const payload: any = {
+    id: profile.id,
+    role: profile.role,
+    full_name: profile.full_name,
+    email: profile.email || null,
+    phone: profile.phone || null,
+  };
+  if (profile.username) payload.username = profile.username;
+  if (profile.password) payload.password = profile.password;
+  if (profile.linked_id) payload.linked_id = profile.linked_id;
+
+  const { error } = await supabase.from('profiles').upsert(payload);
+  if (error) {
+    if (error.message?.includes('column') && (error.message?.includes('username') || error.message?.includes('password') || error.message?.includes('linked_id'))) {
+      const basicPayload = {
+        id: profile.id,
+        role: profile.role,
+        full_name: profile.full_name,
+        email: profile.email || null,
+        phone: profile.phone || null,
+      };
+      const retry = await supabase.from('profiles').upsert(basicPayload);
+      if (retry.error) {
+        console.error('persistProfile fallback error:', retry.error);
+        throw new Error('فشل حفظ الملف الشخصي: ' + retry.error.message);
+      }
+      return;
+    }
+    console.error('persistProfile error:', error);
+    throw new Error('فشل حفظ الملف الشخصي: ' + error.message);
+  }
+}
+
+export async function persistTeacher(teacher: Teacher, profile?: Profile): Promise<void> {
+  if (!supabase) return;
+  if (profile) {
+    try {
+      await persistProfile(profile);
+    } catch (e) {
+      console.warn('Could not persist profile prior to teacher:', e);
+    }
+  }
+  const payload: any = {
+    id: teacher.id,
+    full_name: teacher.full_name,
+    phone: teacher.phone || null,
+    photo_url: teacher.photo_url || null,
+    join_date: teacher.join_date || new Date().toISOString().slice(0, 10),
+    status: teacher.status || 'active',
+  };
+  if (teacher.profile_id) {
+    payload.profile_id = teacher.profile_id;
+  }
+  const { error } = await supabase.from('teachers').upsert(payload);
+  if (error) {
+    console.error('persistTeacher error:', error);
+    throw new Error('فشل حفظ بيانات المحفظ: ' + error.message);
+  }
 }
 
 export async function deleteTeacherRemote(id: string): Promise<void> {
@@ -182,8 +244,22 @@ export async function deleteTeacherRemote(id: string): Promise<void> {
 
 export async function persistStudent(student: Student): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase.from('students').upsert(student);
-  if (error) throw new Error('فشل حفظ بيانات الطالب');
+  const payload: any = { ...student };
+  if (!payload.parent_id) payload.parent_id = null;
+  if (!payload.teacher_id) payload.teacher_id = null;
+  if (!payload.halaqa_id) payload.halaqa_id = null;
+  if (!payload.profile_id) payload.profile_id = null;
+
+  let { error } = await supabase.from('students').upsert(payload);
+  if (error && (error.message?.includes('student_number') || error.message?.includes('identity'))) {
+    delete payload.student_number;
+    const retry = await supabase.from('students').upsert(payload);
+    error = retry.error;
+  }
+  if (error) {
+    console.error('persistStudent error:', error);
+    throw new Error('فشل حفظ بيانات الطالب: ' + error.message);
+  }
 }
 
 export async function deleteStudentRemote(id: string): Promise<void> {
@@ -194,8 +270,13 @@ export async function deleteStudentRemote(id: string): Promise<void> {
 
 export async function persistHalaqa(halaqa: Halaqa): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase.from('halaqat').upsert(halaqa);
-  if (error) throw new Error('فشل حفظ بيانات الحلقة');
+  const payload: any = { ...halaqa };
+  if (!payload.teacher_id) payload.teacher_id = null;
+  const { error } = await supabase.from('halaqat').upsert(payload);
+  if (error) {
+    console.error('persistHalaqa error:', error);
+    throw new Error('فشل حفظ بيانات الحلقة: ' + error.message);
+  }
 }
 
 export async function deleteHalaqaRemote(id: string): Promise<void> {
@@ -209,3 +290,4 @@ export async function markNotificationReadRemote(id: string): Promise<void> {
   const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
   if (error) throw new Error('فشل تحديث الإشعار');
 }
+
